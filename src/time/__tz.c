@@ -1,9 +1,18 @@
 #include "time_impl.h"
-#include <stdint.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "libc.h"
+
+/* The longest format string for TZ environment is
+ * ZZZZZZ+hh:mm:ssZZZZZZ+hh:mm:ss,M12.5.6/hh:mm:ss,M12.5.6/hh:mm:ss */
+#define TZVALUE_MAX			(2*TZNAME_MAX + 52)
+#define TZVALUE_DEFAULT		"/etc/localtime"
 
 long  __timezone = 0;
 int   __daylight = 0;
@@ -20,12 +29,12 @@ const char __gmt[] = "GMT";
 static int dst_off;
 static int r0[5], r1[5];
 
+/* The largest file in the actual timezone database
+ * is slightly bigger than 4Kb. */
+static unsigned char zi_data[8192];
+static size_t zi_size;
+static struct stat zi_st;
 static const unsigned char *zi, *trans, *index, *types, *abbrevs, *abbrevs_end;
-static size_t map_size;
-
-static char old_tz_buf[32];
-static char *old_tz = old_tz_buf;
-static size_t old_tz_size = sizeof old_tz_buf;
 
 static int lock[2];
 
@@ -113,109 +122,142 @@ static size_t zi_dotprod(const unsigned char *z, const unsigned char *v, size_t 
 	return y;
 }
 
-int __munmap(void *, size_t);
-
 static void do_tzset()
 {
-	char buf[NAME_MAX+25], *pathname=buf+24;
-	const char *try, *s, *p;
-	const unsigned char *map = 0;
-	size_t i;
-	static const char search[] =
-		"/usr/share/zoneinfo/\0/share/zoneinfo/\0/etc/zoneinfo/\0";
+	const char *p;
+	const char *s = getenv("TZ");
 
-	s = getenv("TZ");
-	if (!s || !*s) s = "/etc/localtime";
+	if (!s || !*s) s = TZVALUE_DEFAULT;
 
-	if (old_tz && !strcmp(s, old_tz)) return;
-
-	if (zi) __munmap((void *)zi, map_size);
-
-	/* Cache the old value of TZ to check if it has changed. Avoid
-	 * free so as not to pull it into static programs. Growth
-	 * strategy makes it so free would have minimal benefit anyway. */
-	i = strlen(s);
-	if (i > PATH_MAX+1) s = __gmt, i = 3;
-	if (i >= old_tz_size) {
-		old_tz_size *= 2;
-		if (i >= old_tz_size) old_tz_size = i+1;
-		if (old_tz_size > PATH_MAX+2) old_tz_size = PATH_MAX+2;
-		old_tz = malloc(old_tz_size);
-	}
-	if (old_tz) memcpy(old_tz, s, i+1);
-
-	/* Non-suid can use an absolute tzfile pathname or a relative
-	 * pathame beginning with "."; in secure mode, only the
-	 * standard path will be searched. */
 	if (*s == ':' || ((p=strchr(s, '/')) && !memchr(s, ',', p-s))) {
-		if (*s == ':') s++;
-		if (*s == '/' || *s == '.') {
-			if (!libc.secure || !strcmp(s, "/etc/localtime"))
-				map = __map_file(s, &map_size);
-		} else {
-			size_t l = strlen(s);
-			if (l <= NAME_MAX && !strchr(s, '.')) {
-				memcpy(pathname, s, l+1);
-				pathname[l] = 0;
-				for (try=search; !map && *try; try+=l+1) {
-					l = strlen(try);
-					memcpy(pathname-l, try, l);
-					map = __map_file(pathname-l, &map_size);
+		static char old_s[NAME_MAX+1] = { 0 };
+		static char old_pathname[NAME_MAX+1] = { 0 };
+		const char *cached_s = s;
+		char pathname[NAME_MAX+1];
+		struct stat st;
+		int st_read = 0;
+		/* Non-suid can use an absolute tzfile pathname or a relative
+		 * pathame beginning with "."; in secure mode, only the
+		 * standard path will be searched. */
+		if (*s == ':') s++, cached_s++;
+		if (zi && !strcmp(old_s, s)) {
+			st_read = !stat(old_pathname, &st);
+			s = old_pathname;
+		} else if (*s == '/' || *s == '.') {
+			if (!libc.secure || !strcmp(s, TZVALUE_DEFAULT)) {
+				st_read = !stat(s, &st);
+			}
+		} else if (!strchr(s, '.')) {
+			const size_t l = strlen(s);
+			if (l < sizeof pathname) {
+				static const char search[] =
+					"/usr/share/zoneinfo/\0"
+					"/share/zoneinfo/\0"
+					"/etc/zoneinfo/\0";
+				const char *try = search;
+				memcpy(pathname, s, l);
+				while (*try) {
+					const size_t tl = strlen(try)+1;
+					if (l+tl <= sizeof pathname) {
+						memcpy(pathname+l, try, tl);
+						if (!stat(pathname, &st)) {
+							st_read = 1;
+							s = pathname;
+							break;
+						}
+					}
+					try += tl;
 				}
 			}
 		}
-		if (!map) s = __gmt;
-	}
-	if (map && (map_size < 44 || memcmp(map, "TZif", 4))) {
-		__munmap((void *)map, map_size);
-		map = 0;
-		s = __gmt;
-	}
 
-	zi = map;
-	if (map) {
-		int scale = 2;
-		if (sizeof(time_t) > 4 && map[4]=='2') {
-			size_t skip = zi_dotprod(zi+20, VEC(1,1,8,5,6,1), 6);
-			trans = zi+skip+44+44;
-			scale++;
-		} else {
-			trans = zi+44;
-		}
-		index = trans + (zi_read32(trans-12) << scale);
-		types = index + zi_read32(trans-12);
-		abbrevs = types + 6*zi_read32(trans-8);
-		abbrevs_end = abbrevs + zi_read32(trans-4);
-		if (zi[map_size-1] == '\n') {
-			for (s = (const char *)zi+map_size-2; *s!='\n'; s--);
-			s++;
-		} else {
-			const unsigned char *p;
-			__tzname[0] = __tzname[1] = 0;
-			__daylight = __timezone = dst_off = 0;
-			for (i=0; i<5; i++) r0[i] = r1[i] = 0;
-			for (p=types; p<abbrevs; p+=6) {
-				if (!p[4] && !__tzname[0]) {
-					__tzname[0] = (char *)abbrevs + p[5];
-					__timezone = -zi_read32(p);
-				}
-				if (p[4] && !__tzname[1]) {
-					__tzname[1] = (char *)abbrevs + p[5];
-					dst_off = -zi_read32(p);
-					__daylight = 1;
-				}
-			}
-			if (!__tzname[0]) __tzname[0] = __tzname[1];
-			if (!__tzname[0]) __tzname[0] = (char *)__gmt;
-			if (!__daylight) {
-				__tzname[1] = __tzname[0];
-				dst_off = __timezone;
-			}
+		if (!st_read || st.st_size < 44 || st.st_size > sizeof zi_data) {
+			zi = 0;
+		} else if (zi && !memcmp(&st, &zi_st, sizeof st)) {
 			return;
+		} else {
+			int fd = open(s, O_RDONLY);
+			if (fd < 0) {
+				zi = 0;
+			} else {
+				unsigned char *p = zi_data;
+				size_t l = (size_t) st.st_size;
+				while (l) {
+					ssize_t n = read(fd, p, l);
+					if (n < 0) {
+						if (errno == EINTR || errno == EAGAIN)
+							continue;
+						break;
+					}
+					l -= (size_t) n;
+					p += (size_t) n;
+				}
+				while (close(fd) && errno == EINTR);
+
+				if (l) {
+					zi = 0;
+				} else {
+					size_t i;
+					int scale = 2;
+
+					zi = zi_data;
+					zi_size = (size_t) st.st_size;
+					memcpy(&zi_st, &st, sizeof st);
+					strcpy(old_s, cached_s);
+					if (old_pathname != s) strcpy(old_pathname, s);
+
+					if (sizeof(time_t) > 4 && zi[4] == '2') {
+						size_t skip = zi_dotprod(zi+20, VEC(1,1,8,5,6,1), 6);
+						trans = zi+skip+44+44;
+						scale++;
+					} else {
+						trans = zi+44;
+					}
+					index = trans + (zi_read32(trans-12) << scale);
+					types = index + zi_read32(trans-12);
+					abbrevs = types + 6*zi_read32(trans-8);
+					abbrevs_end = abbrevs + zi_read32(trans-4);
+
+					if (zi[zi_size-1] == '\n') {
+						for (s = (const char *)zi+zi_size-2; *s!='\n'; s--);
+						s++;
+					} else {
+						const unsigned char *p;
+						__tzname[0] = __tzname[1] = 0;
+						__daylight = __timezone = dst_off = 0;
+						for (i=0; i<5; i++) r0[i] = r1[i] = 0;
+						for (p=types; p<abbrevs; p+=6) {
+							if (!p[4] && !__tzname[0]) {
+								__tzname[0] = (char *)abbrevs + p[5];
+								__timezone = -zi_read32(p);
+							}
+							if (p[4] && !__tzname[1]) {
+								__tzname[1] = (char *)abbrevs + p[5];
+								dst_off = -zi_read32(p);
+								__daylight = 1;
+							}
+						}
+						if (!__tzname[0]) __tzname[0] = __tzname[1];
+						if (!__tzname[0]) __tzname[0] = (char *)__gmt;
+						if (!__daylight) {
+							__tzname[1] = __tzname[0];
+							dst_off = __timezone;
+						}
+						return;
+					}
+				}
+			}
 		}
+		if (!zi) s = __gmt;
+	} else {
+		size_t i = strlen(s)+1;
+		static char old_tz[TZVALUE_MAX+1] = { 0 };
+		if (i > sizeof old_tz) s = __gmt, i = sizeof __gmt;
+		if (!zi && !strcmp(s, old_tz)) return;
+		zi = 0;
+		memcpy(old_tz, s, i);
 	}
 
-	if (!s) s = __gmt;
 	getname(std_name, &s);
 	__tzname[0] = std_name;
 	__timezone = getoff(&s);
@@ -223,10 +265,10 @@ static void do_tzset()
 	__tzname[1] = dst_name;
 	if (dst_name[0]) {
 		__daylight = 1;
-		if (*s == '+' || *s=='-' || *s-'0'<10U)
+		if (*s == '+' || *s == '-' || *s-'0'<10U)
 			dst_off = getoff(&s);
 		else
-			dst_off = __timezone - 3600;
+			dst_off = __timezone-3600;
 	} else {
 		__daylight = 0;
 		dst_off = 0;
