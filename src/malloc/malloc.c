@@ -13,6 +13,13 @@
 #define inline inline __attribute__((always_inline))
 #endif
 
+#if defined (__DEBUG__)
+static int debug_on = 0;
+#define debug_(...)	if (debug_on) {fprintf(stderr, __VA_ARGS__);}
+#else
+#define debug_(...)	{}
+#endif
+
 uintptr_t __brk(uintptr_t);
 void *__mmap(void *, size_t, int, int, int, off_t);
 int __munmap(void *, size_t);
@@ -130,6 +137,15 @@ static int bin_index_up(size_t x)
 	if (x <= 32) return x;
 	return ((union { float v; uint32_t r; }){(int)x}.r+0x1fffff>>21) - 496;
 }
+
+#if defined (__DEBUG__)
+void __dump_bins(int x)
+{
+	fprintf(stderr, "Current mal.brk=%lu\n", mal.brk);
+	fprintf(stderr, "Bin map 0x%0llx\n", mal.binmap);
+	debug_on = 1;
+}
+#endif
 
 #if 0
 void __dump_heap(int x)
@@ -452,6 +468,7 @@ void free(void *p)
 {
 	struct chunk *self = MEM_TO_CHUNK(p);
 	struct chunk *next;
+	uintptr_t new_brk;
 	size_t final_size, new_size, size;
 	int reclaim=0;
 	int i;
@@ -516,17 +533,41 @@ void free(void *p)
 		}
 	}
 
-	self->csize = final_size;
-	next->psize = final_size;
-	unlock(mal.free_lock);
+	lock(mal.brk_lock);
+	/* Align to 2 */
+	new_brk = (uintptr_t) self + OVERHEAD + 1 & -2;
+	/* Last chunk in address space? */
+	if (next->csize == (0 | C_INUSE) &&
+			(uintptr_t) next + OVERHEAD == mal.brk &&
+			/* Only in Large Bin */
+			i == 63 &&
+			/* Shrink heap */
+			__brk(new_brk) == new_brk) {
+		debug_("mal.brk=%ld\n", mal.brk);
+		debug_("Return to system %ld bytes\n", mal.brk - new_brk);
+		mal.brk = new_brk;
+		unlock(mal.brk_lock);
+		debug_("New mal.brk=%ld\n", mal.brk);
 
-	self->next = BIN_TO_CHUNK(i);
-	self->prev = mal.bins[i].tail;
-	self->next->prev = self;
-	self->prev->next = self;
+		/* Compose a terminator chunk */
+		self->csize = 0 | C_INUSE;
 
-	if (!(mal.binmap & 1ULL<<i))
-		a_or_64(&mal.binmap, 1ULL<<i);
+		unlock(mal.free_lock);
+	} else {
+		/* Add free chunk to corresponding Bin */
+		unlock(mal.brk_lock);
+		self->csize = final_size;
+		next->psize = final_size;
+		unlock(mal.free_lock);
+
+		self->next = BIN_TO_CHUNK(i);
+		self->prev = mal.bins[i].tail;
+		self->next->prev = self;
+		self->prev->next = self;
+
+		if (!(mal.binmap & 1ULL<<i))
+			a_or_64(&mal.binmap, 1ULL<<i);
+	}
 
 	unlock_bin(i);
 }
