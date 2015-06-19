@@ -28,6 +28,9 @@ static dev_t map_dev;
 static ino_t map_ino;
 static time_t map_mtime;
 
+static const char *tzfile;
+static size_t tzfile_size;
+
 static char old_tz_buf[32];
 static char *old_tz = old_tz_buf;
 static size_t old_tz_size = sizeof old_tz_buf;
@@ -131,6 +134,15 @@ static void do_tzset()
 	time_t mtime;
 
 	s = getenv("TZ");
+
+	/* if TZ is empty try to read it from /etc/TZ */
+	if (!s || !*s) {
+		if (tzfile)
+			__munmap((void*)tzfile, tzfile_size);
+
+		s = tzfile = (void *)__map_file("/etc/TZ", &tzfile_size, 0, 0, 0);
+	}
+
 	if (s && !*s) s = __utc;
 	if (old_tz && s && !strcmp(s, old_tz)) return;
 	if (s) {
