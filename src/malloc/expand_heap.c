@@ -37,9 +37,10 @@ void *__mmap(void *, size_t, int, int, int, off_t);
  * and mmap minimum size rules. The caller is responsible for locking
  * to prevent concurrent calls. */
 
+uintptr_t brk_ = 0;
+
 void *__expand_heap(size_t *pn)
 {
-	static uintptr_t brk;
 	static unsigned mmap_step;
 	size_t n = *pn;
 
@@ -49,16 +50,16 @@ void *__expand_heap(size_t *pn)
 	}
 	n += -n & PAGE_SIZE-1;
 
-	if (!brk) {
-		brk = __syscall(SYS_brk, 0);
-		brk += -brk & PAGE_SIZE-1;
+	if (!brk_) {
+		brk_ = __syscall(SYS_brk, 0);
+		brk_ += -brk_ & PAGE_SIZE-1;
 	}
 
-	if (n < SIZE_MAX-brk && !traverses_stack_p(brk, brk+n)
-	    && __syscall(SYS_brk, brk+n)==brk+n) {
+	if (n < SIZE_MAX-brk_ && !traverses_stack_p(brk_, brk_+n)
+			&& __syscall(SYS_brk, brk_+n)==brk_+n) {
 		*pn = n;
-		brk += n;
-		return (void *)(brk-n);
+		brk_ += n;
+		return (void *)(brk_-n);
 	}
 
 	size_t min = (size_t)PAGE_SIZE << mmap_step/2;

@@ -13,6 +13,13 @@
 #define inline inline __attribute__((always_inline))
 #endif
 
+#if defined (__DEBUG__)
+static int debug_on = 0;
+#define debug_(...)	if (debug_on) {fprintf(stderr, __VA_ARGS__);}
+#else
+#define debug_(...)	{}
+#endif
+
 void *__mmap(void *, size_t, int, int, int, off_t);
 int __munmap(void *, size_t);
 void *__mremap(void *, size_t, size_t, int, ...);
@@ -35,6 +42,8 @@ static struct {
 	volatile int free_lock[2];
 } mal;
 
+static volatile int brk_lock[2];
+extern uintptr_t brk_;
 
 #define SIZE_ALIGN (4*sizeof(size_t))
 #define SIZE_MASK (-SIZE_ALIGN)
@@ -126,6 +135,15 @@ static int bin_index_up(size_t x)
 	return ((union { float v; uint32_t r; }){(int)x}.r+0x1fffff>>21) - 496;
 }
 
+#if defined (__DEBUG__)
+void __dump_bins(int x)
+{
+	fprintf(stderr, "Current brk_=%lu\n", brk_);
+	fprintf(stderr, "Bin map 0x%0llx\n", mal.binmap);
+	debug_on = 1;
+}
+#endif
+
 #if 0
 void __dump_heap(int x)
 {
@@ -162,8 +180,11 @@ static struct chunk *expand_heap(size_t n)
 	n += SIZE_ALIGN;
 
 	lock(heap_lock);
+	lock(brk_lock);
 
 	p = __expand_heap(&n);
+	unlock(brk_lock);
+
 	if (!p) {
 		unlock(heap_lock);
 		return 0;
@@ -441,6 +462,7 @@ void free(void *p)
 {
 	struct chunk *self = MEM_TO_CHUNK(p);
 	struct chunk *next;
+	uintptr_t new_brk;
 	size_t final_size, new_size, size;
 	int reclaim=0;
 	int i;
@@ -493,28 +515,55 @@ void free(void *p)
 		}
 	}
 
-	if (!(mal.binmap & 1ULL<<i))
-		a_or_64(&mal.binmap, 1ULL<<i);
+	lock(brk_lock);
+	/* Align to 2 */
+	new_brk = (uintptr_t) self + OVERHEAD + 1 & -2;
+	/* Last chunk in address space? */
+	if (next->csize == (0 | C_INUSE) &&
+	    (uintptr_t) next + OVERHEAD == brk_ &&
+	    /* Only in Large Bin */
+	    i == 63 &&
+	    /* Shrink heap */
+	    __syscall(SYS_brk, new_brk) == new_brk) {
+		debug_("brk_=%ld\n", brk_);
+		debug_("Return to system %ld bytes\n", brk_ - new_brk);
+		brk_ = new_brk;
+		unlock(brk_lock);
+		debug_("New brk_=%ld\n", brk_);
 
-	self->csize = final_size;
-	next->psize = final_size;
-	unlock(mal.free_lock);
+		/* Compose a terminator chunk */
+		self->csize = 0 | C_INUSE;
 
-	self->next = BIN_TO_CHUNK(i);
-	self->prev = mal.bins[i].tail;
-	self->next->prev = self;
-	self->prev->next = self;
+		unlock(mal.free_lock);
+	} else {
+		/* Add free chunk to corresponding Bin */
+		unlock(brk_lock);
+		if (!(mal.binmap & 1ULL<<i))
+			a_or_64(&mal.binmap, 1ULL<<i);
 
-	/* Replace middle of large chunks with fresh zero pages */
-	if (reclaim) {
-		uintptr_t a = (uintptr_t)self + SIZE_ALIGN+PAGE_SIZE-1 & -PAGE_SIZE;
-		uintptr_t b = (uintptr_t)next - SIZE_ALIGN & -PAGE_SIZE;
+		self->csize = final_size;
+		next->psize = final_size;
+		unlock(mal.free_lock);
+
+		self->next = BIN_TO_CHUNK(i);
+		self->prev = mal.bins[i].tail;
+		self->next->prev = self;
+		self->prev->next = self;
+
+		if (!(mal.binmap & 1ULL<<i))
+			a_or_64(&mal.binmap, 1ULL<<i);
+
+		/* Replace middle of large chunks with fresh zero pages */
+		if (reclaim) {
+			uintptr_t a = (uintptr_t)self + SIZE_ALIGN+PAGE_SIZE-1 & -PAGE_SIZE;
+			uintptr_t b = (uintptr_t)next - SIZE_ALIGN & -PAGE_SIZE;
 #if 1
-		__madvise((void *)a, b-a, MADV_DONTNEED);
+			__madvise((void *)a, b-a, MADV_DONTNEED);
 #else
-		__mmap((void *)a, b-a, PROT_READ|PROT_WRITE,
-			MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED, -1, 0);
+			__mmap((void *)a, b-a, PROT_READ|PROT_WRITE,
+				MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED, -1, 0);
 #endif
+		}
 	}
 
 	unlock_bin(i);
