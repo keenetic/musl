@@ -75,7 +75,7 @@ const struct __locale_map *__get_locale(int cat, const char *val)
 		memcpy(buf+l+1, val, n);
 		buf[l+1+n] = 0;
 		size_t map_size;
-		const void *map = __map_file(buf, &map_size);
+		const void *map = __map_file(buf, &map_size, 0, 0, 0);
 		if (map) {
 			new = malloc(sizeof *new);
 			if (!new) {

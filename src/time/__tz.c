@@ -30,6 +30,9 @@ static int r0[5], r1[5];
 
 static const unsigned char *zi, *trans, *index, *types, *abbrevs, *abbrevs_end;
 static size_t map_size;
+static dev_t map_dev;
+static ino_t map_ino;
+static time_t map_mtime;
 
 static char old_tz_buf[32];
 static char *old_tz = old_tz_buf;
@@ -127,32 +130,33 @@ static void do_tzset()
 	char buf[NAME_MAX+25], *pathname=buf+24;
 	const char *try, *s, *p;
 	const unsigned char *map = 0;
+	dev_t dev;
+	ino_t ino;
 	size_t i;
 	static const char search[] =
 		"/usr/share/zoneinfo/\0/share/zoneinfo/\0/etc/zoneinfo/\0";
+	time_t mtime;
 
 	s = getenv("TZ");
-	if (!s) s = "/etc/localtime";
-	if (!*s) s = __utc;
-
-	if (old_tz && !strcmp(s, old_tz)) return;
-
-	for (i=0; i<5; i++) r0[i] = r1[i] = 0;
-
-	if (zi) __munmap((void *)zi, map_size);
-
-	/* Cache the old value of TZ to check if it has changed. Avoid
-	 * free so as not to pull it into static programs. Growth
-	 * strategy makes it so free would have minimal benefit anyway. */
-	i = strlen(s);
-	if (i > PATH_MAX+1) s = __utc, i = 3;
-	if (i >= old_tz_size) {
-		old_tz_size *= 2;
-		if (i >= old_tz_size) old_tz_size = i+1;
-		if (old_tz_size > PATH_MAX+2) old_tz_size = PATH_MAX+2;
-		old_tz = malloc(old_tz_size);
+	if (s && !*s) s = __utc;
+	if (old_tz && s && !strcmp(s, old_tz)) return;
+	if (s) {
+		/* Cache the old value of TZ to check if it has changed. Avoid
+		 * free so as not to pull it into static programs. Growth
+		 * strategy makes it so free would have minimal benefit anyway. */
+		i = strlen(s);
+		if (i > PATH_MAX+1) s = __utc, i = 3;
+		if (i >= old_tz_size) {
+			old_tz_size *= 2;
+			if (i >= old_tz_size) old_tz_size = i+1;
+			if (old_tz_size > PATH_MAX+2) old_tz_size = PATH_MAX+2;
+			old_tz = malloc(old_tz_size);
+		}
+		if (old_tz) memcpy(old_tz, s, i+1);
+	} else {
+		s = "/etc/localtime";
+		if (old_tz) old_tz[0] = 0;
 	}
-	if (old_tz) memcpy(old_tz, s, i+1);
 
 	int posix_form = 0;
 	if (*s != ':') {
@@ -172,7 +176,7 @@ static void do_tzset()
 		if (*s == ':') s++;
 		if (*s == '/' || *s == '.') {
 			if (!libc.secure || !strcmp(s, "/etc/localtime"))
-				map = __map_file(s, &map_size);
+				map = __map_file(s, &map_size, &dev, &ino, &mtime);
 		} else {
 			size_t l = strlen(s);
 			if (l <= NAME_MAX && !strchr(s, '.')) {
@@ -181,12 +185,27 @@ static void do_tzset()
 				for (try=search; !map && *try; try+=l+1) {
 					l = strlen(try);
 					memcpy(pathname-l, try, l);
-					map = __map_file(pathname-l, &map_size);
+					map = __map_file(pathname-l, &map_size, &dev, &ino, &mtime);
 				}
 			}
 		}
-		if (!map) s = __utc;
+		if (map) {
+			if (zi && map_ino == ino && map_dev == dev && map_mtime == mtime) {
+				__munmap((void *)map, map_size);
+				return;
+			}
+			map_ino = ino;
+			map_dev = dev;
+			map_mtime = mtime;
+		} else {
+			s = __utc;
+		}
 	}
+
+	for (i=0; i<5; i++) r0[i] = r1[i] = 0;
+
+	if (zi) __munmap((void *)zi, map_size);
+
 	if (map && (map_size < 44 || memcmp(map, "TZif", 4))) {
 		__munmap((void *)map, map_size);
 		map = 0;
