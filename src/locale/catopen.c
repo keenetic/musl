@@ -14,7 +14,7 @@
 static nl_catd do_catopen(const char *name)
 {
 	size_t size;
-	const unsigned char *map = __map_file(name, &size);
+	const unsigned char *map = __map_file(name, &size, 0, 0, 0);
 	/* Size recorded in the file must match file size; otherwise
 	 * the information needed to unmap the file will be lost. */
 	if (!map || V(map) != 0xff88ff89 || 20+V(map+8) != size) {
