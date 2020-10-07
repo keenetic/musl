@@ -64,7 +64,7 @@ ALL_INCLUDES = $(sort $(INCLUDES:$(srcdir)/%=%) $(GENH:obj/%=%) $(ARCH_INCLUDES:
 EMPTY_LIB_NAMES = m rt pthread crypt util xnet resolv dl
 EMPTY_LIBS = $(EMPTY_LIB_NAMES:%=lib/lib%.a)
 CRT_LIBS = $(addprefix lib/,$(notdir $(CRT_OBJS)))
-STATIC_LIBS = lib/libc.a
+STATIC_LIBS = lib/libc.a lib/libc_pic.a
 SHARED_LIBS = lib/libc.so
 TOOL_LIBS = lib/musl-gcc.specs
 ALL_LIBS = $(CRT_LIBS) $(STATIC_LIBS) $(SHARED_LIBS) $(EMPTY_LIBS) $(TOOL_LIBS)
@@ -165,6 +165,11 @@ lib/libc.so: $(LOBJS) $(LDSO_OBJS)
 lib/libc.a: $(AOBJS)
 	rm -f $@
 	$(AR) rc $@ $(AOBJS)
+	$(RANLIB) $@
+
+lib/libc_pic.a: $(LOBJS) $(LDSO_OBJS)
+	rm -f $@
+	$(AR) rc $@ $(LOBJS) $(LDSO_OBJS)
 	$(RANLIB) $@
 
 $(EMPTY_LIBS):
