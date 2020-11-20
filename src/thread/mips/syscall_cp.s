@@ -1,3 +1,4 @@
+.cfi_sections .debug_frame
 .set    noreorder
 
 .global __cp_begin
@@ -14,7 +15,9 @@
 .hidden __syscall_cp_asm
 .type   __syscall_cp_asm,@function
 __syscall_cp_asm:
+	.cfi_startproc
 	subu    $sp, $sp, 32
+	.cfi_adjust_cfa_offset 32
 __cp_begin:
 	lw      $4, 0($4)
 	bne     $4, $0, __cp_cancel
@@ -35,14 +38,17 @@ __cp_begin:
 __cp_end:
 	beq     $7, $0, 1f
 	addu    $sp, $sp, 32
+	.cfi_adjust_cfa_offset -32
 	subu    $2, $0, $2
 1:	jr      $ra
 	nop
 
 __cp_cancel:
 	move    $2, $ra
+	.cfi_register $ra, $2
 	bal     1f
 	addu    $sp, $sp, 32
+	.cfi_adjust_cfa_offset -32
 	.gpword .
 	.gpword __cancel
 1:	lw      $3, ($ra)
@@ -51,3 +57,5 @@ __cp_cancel:
 	addu    $25, $25, $3
 	jr      $25
 	move    $ra, $2
+	.cfi_restore $ra
+	.cfi_endproc
