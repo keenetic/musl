@@ -1,8 +1,10 @@
+.cfi_sections .debug_frame
 .set noreorder
 
 .global pipe
 .type   pipe,@function
 pipe:
+	.cfi_startproc
 	lui $gp, %hi(_gp_disp)
 	addiu $gp, %lo(_gp_disp)
 	addu $gp, $gp, $25
@@ -18,3 +20,4 @@ pipe:
 	move $2, $0
 	jr $ra
 	nop
+	.cfi_endproc
