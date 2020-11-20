@@ -1,3 +1,4 @@
+.cfi_sections .debug_frame
 .set noreorder
 
 .global sigsetjmp
@@ -6,6 +7,7 @@
 .type __sigsetjmp,@function
 sigsetjmp:
 __sigsetjmp:
+	.cfi_startproc
 	lui $gp, %hi(_gp_disp)
 	addiu $gp, %lo(_gp_disp)
 	beq $5, $0, 1f
@@ -31,3 +33,4 @@ __sigsetjmp:
 1:	lw $25, %call16(setjmp)($gp)
 	jr $25
 	 nop
+	.cfi_endproc
