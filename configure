@@ -593,9 +593,6 @@ tryldflag LDFLAGS_AUTO -Wl,--sort-common
 # replaced by strong definitions from other translation units.
 tryldflag LDFLAGS_AUTO -Wl,--gc-sections
 
-# Some patched GCC builds have these defaults messed up...
-tryldflag LDFLAGS_AUTO -Wl,--hash-style=both
-
 # Prevent linking if there are undefined symbols; if any exist,
 # libc.so will crash at runtime during relocation processing.
 # The common way this can happen is failure to link the compiler
