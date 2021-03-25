@@ -1,8 +1,10 @@
 #include "time_impl.h"
 #include <stdint.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/mman.h>
 #include <ctype.h>
 #include "libc.h"
@@ -13,6 +15,8 @@
 #define calloc undef
 #define realloc undef
 #define free undef
+
+#define TZ_BUFLEN 100
 
 long  __timezone = 0;
 int   __daylight = 0;
@@ -125,9 +129,34 @@ static size_t zi_dotprod(const unsigned char *z, const unsigned char *v, size_t 
 	return y;
 }
 
+static char *read_tz_file(char *b, size_t s)
+{
+	int fd;
+	char *p = 0;
+	ssize_t l;
+
+	fd = open("/etc/TZ", O_RDONLY);
+	if (fd < 0) return 0;
+
+	l = read(fd, b, s);
+	if (l <= 0) {
+		close(fd);
+		return 0;
+	}
+
+	if (b[l-1] == '\n') {
+		b[l-1] = 0;
+		p = b;
+	}
+
+	close(fd);
+
+	return p;
+}
+
 static void do_tzset()
 {
-	char buf[NAME_MAX+25], *pathname=buf+24;
+	char buf[NAME_MAX+25], *pathname=buf+24, tzbuf[TZ_BUFLEN];
 	const char *try, *s, *p;
 	const unsigned char *map = 0;
 	dev_t dev;
@@ -138,6 +167,7 @@ static void do_tzset()
 	time_t mtime;
 
 	s = getenv("TZ");
+	if (!s || !*s) s = read_tz_file(tzbuf, sizeof tzbuf);
 	if (s && !*s) s = __utc;
 	if (old_tz && s && !strcmp(s, old_tz)) return;
 	if (s) {
