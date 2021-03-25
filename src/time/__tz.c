@@ -183,6 +183,9 @@ static void do_tzset()
 				__munmap((void *)map, map_size);
 				return;
 			}
+			map_ino = ino;
+			map_dev = dev;
+			map_mtime = mtime;
 		} else {
 			s = __utc;
 		}
