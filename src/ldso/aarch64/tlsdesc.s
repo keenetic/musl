@@ -2,12 +2,15 @@
 // {
 // 	return a[1];
 // }
+.cfi_sections .debug_frame
 .global __tlsdesc_static
 .hidden __tlsdesc_static
 .type __tlsdesc_static,@function
 __tlsdesc_static:
+	.cfi_startproc
 	ldr x0,[x0,#8]
 	ret
+	.cfi_endproc
 
 // size_t __tlsdesc_dynamic(size_t *a)
 // {
@@ -19,6 +22,7 @@ __tlsdesc_static:
 .hidden __tlsdesc_dynamic
 .type __tlsdesc_dynamic,@function
 __tlsdesc_dynamic:
+	.cfi_startproc
 	stp x1,x2,[sp,#-16]!
 	mrs x1,tpidr_el0      // tp
 	ldr x0,[x0,#8]        // p
@@ -29,3 +33,4 @@ __tlsdesc_dynamic:
 	add x0,x1,x2          // dtv[p->modidx] + p->off - tp
 	ldp x1,x2,[sp],#16
 	ret
+	.cfi_endproc
