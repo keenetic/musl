@@ -4,6 +4,7 @@
 // syscall(nr, u, v, w, x, y, z)
 //         x8  x0 x1 x2 x3 x4 x5
 
+.cfi_sections .debug_frame
 .global __cp_begin
 .hidden __cp_begin
 .global __cp_end
@@ -16,6 +17,7 @@
 .type __syscall_cp_asm,%function
 __syscall_cp_asm:
 __cp_begin:
+	.cfi_startproc
 	ldr w0,[x0]
 	cbnz w0,__cp_cancel
 	mov x8,x1
@@ -30,3 +32,4 @@ __cp_end:
 	ret
 __cp_cancel:
 	b __cancel
+	.cfi_endproc
