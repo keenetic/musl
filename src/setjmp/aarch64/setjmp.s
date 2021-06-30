@@ -1,3 +1,4 @@
+.cfi_sections .debug_frame
 .global __setjmp
 .global _setjmp
 .global setjmp
@@ -7,6 +8,7 @@
 __setjmp:
 _setjmp:
 setjmp:
+	.cfi_startproc
 	// IHI0055B_aapcs64.pdf 5.1.1, 5.1.2 callee saved registers
 	stp x19, x20, [x0,#0]
 	stp x21, x22, [x0,#16]
@@ -15,6 +17,7 @@ setjmp:
 	stp x27, x28, [x0,#64]
 	stp x29, x30, [x0,#80]
 	mov x2, sp
+	.cfi_register sp, x2
 	str x2, [x0,#104]
 	stp  d8,  d9, [x0,#112]
 	stp d10, d11, [x0,#128]
@@ -22,3 +25,4 @@ setjmp:
 	stp d14, d15, [x0,#160]
 	mov x0, #0
 	ret
+	.cfi_endproc
