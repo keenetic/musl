@@ -33,6 +33,7 @@ __clone:
 	jr $ra
 	nop
 1:	.cfi_undefined $ra
+	move $fp, $0
 	lw $25, 0($sp)
 	lw $4, 4($sp)
 	jalr $25

@@ -27,6 +27,7 @@ __clone:
 	ret
 	// child
 1:	.cfi_undefined x30
+	mov fp, 0
 	ldp x1,x0,[sp],#16
 	blr x1
 	mov x8,#93 // SYS_exit
